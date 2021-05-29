@@ -26,6 +26,8 @@ try:  # Python 3
 except ImportError:  # Python 2
     import urlparse
 
+from async_property import async_property
+
 
 # PEP 249 module globals
 apilevel = '2.0'
@@ -204,8 +206,8 @@ class Cursor(common.DBAPICursor):
         self._nextUri = None
         self._columns = None
 
-    @property
-    def description(self):
+    @async_property
+    async def description(self):
         """This read-only attribute is a sequence of 7-item sequences.
 
         Each of these sequences contains information describing one result column:
@@ -222,7 +224,7 @@ class Cursor(common.DBAPICursor):
         section below.
         """
         # Sleep until we're done or we got the columns
-        self._fetch_while(
+        await self._fetch_while(
             lambda: self._columns is None and
             self._state not in (self._STATE_NONE, self._STATE_FINISHED)
         )
@@ -234,7 +236,7 @@ class Cursor(common.DBAPICursor):
             for col in self._columns
         ]
 
-    def execute(self, operation, parameters=None):
+    async def execute(self, operation, parameters=None):
         """Prepare and execute a database operation (query or command).
 
         Return values are not defined.
@@ -266,9 +268,9 @@ class Cursor(common.DBAPICursor):
             '{}:{}'.format(self._host, self._port), '/v1/statement', None, None, None))
         _logger.info('%s', sql)
         _logger.debug("Headers: %s", headers)
-        response = self._requests_session.post(
+        response = await self._requests_session.post(
             url, data=sql.encode('utf-8'), headers=headers, **self._requests_kwargs)
-        self._process_response(response)
+        await self._process_response(response)
 
     def cancel(self):
         if self._state == self._STATE_NONE:
@@ -285,7 +287,7 @@ class Cursor(common.DBAPICursor):
         self._state = self._STATE_FINISHED
         self._nextUri = None
 
-    def poll(self):
+    async def poll(self):
         """Poll for and return the raw status data provided by the Presto REST API.
 
         :returns: dict -- JSON status information or ``None`` if the query is done
@@ -299,33 +301,33 @@ class Cursor(common.DBAPICursor):
         if self._nextUri is None:
             assert self._state == self._STATE_FINISHED, "Should be finished if nextUri is None"
             return None
-        response = self._requests_session.get(self._nextUri, **self._requests_kwargs)
-        self._process_response(response)
+        response = await self._requests_session.get(self._nextUri, **self._requests_kwargs)
+        await self._process_response(response)
         return response.json()
 
-    def _fetch_more(self):
+    async def _fetch_more(self):
         """Fetch the next URI and update state"""
-        self._process_response(self._requests_session.get(self._nextUri, **self._requests_kwargs))
+        await self._process_response(await self._requests_session.get(self._nextUri, **self._requests_kwargs))
 
-    def _decode_binary(self, rows):
+    async def _decode_binary(self, rows):
         # As of Presto 0.69, binary data is returned as the varbinary type in base64 format
         # This function decodes base64 data in place
-        for i, col in enumerate(self.description):
+        for i, col in enumerate(await self.description):
             if col[1] == 'varbinary':
                 for row in rows:
                     if row[i] is not None:
                         row[i] = base64.b64decode(row[i])
 
-    def _process_response(self, response):
+    async def _process_response(self, response):
         """Given the JSON response from Presto's REST API, update the internal state with the next
         URI and any data from the response
         """
         # TODO handle HTTP 503
-        if response.status_code != requests.codes.ok:
+        if response.status != requests.codes.ok:
             fmt = "Unexpected status code {}\n{}"
             raise OperationalError(fmt.format(response.status_code, response.content))
 
-        response_json = response.json()
+        response_json = await response.json()
         _logger.debug("Got response %s", response_json)
         assert self._state == self._STATE_RUNNING, "Should be running if processing response"
         self._nextUri = response_json.get('nextUri')
@@ -341,7 +343,7 @@ class Cursor(common.DBAPICursor):
         if 'data' in response_json:
             assert self._columns
             new_data = response_json['data']
-            self._decode_binary(new_data)
+            await self._decode_binary(new_data)
             self._data += map(tuple, new_data)
         if 'nextUri' not in response_json:
             self._state = self._STATE_FINISHED

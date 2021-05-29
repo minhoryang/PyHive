@@ -41,6 +41,7 @@ setup(
     install_requires=[
         'future',
         'python-dateutil',
+        'async_property',
     ],
     extras_require={
         'presto': ['requests>=1.0.0'],

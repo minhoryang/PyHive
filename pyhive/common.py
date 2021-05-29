@@ -17,6 +17,7 @@ import time
 import datetime
 from future.utils import with_metaclass
 from itertools import islice
+import asyncio
 
 
 class DBAPICursor(with_metaclass(abc.ABCMeta, object)):
@@ -41,11 +42,11 @@ class DBAPICursor(with_metaclass(abc.ABCMeta, object)):
         self._data = collections.deque()
         self._columns = None
 
-    def _fetch_while(self, fn):
+    async def _fetch_while(self, fn):
         while fn():
-            self._fetch_more()
+            await self._fetch_more()
             if fn():
-                time.sleep(self._poll_interval)
+                await asyncio.sleep(self._poll_interval)
 
     @abc.abstractproperty
     def description(self):
@@ -92,7 +93,7 @@ class DBAPICursor(with_metaclass(abc.ABCMeta, object)):
         if seq_of_parameters:
             self.execute(operation, seq_of_parameters[-1])
 
-    def fetchone(self):
+    async def fetchone(self):
         """Fetch the next row of a query result set, returning a single sequence, or ``None`` when
         no more data is available.
 
@@ -103,7 +104,7 @@ class DBAPICursor(with_metaclass(abc.ABCMeta, object)):
             raise exc.ProgrammingError("No query yet")
 
         # Sleep until we're done or we have some data to return
-        self._fetch_while(lambda: not self._data and self._state != self._STATE_FINISHED)
+        await self._fetch_while(lambda: not self._data and self._state != self._STATE_FINISHED)
 
         if not self._data:
             return None
@@ -135,6 +136,19 @@ class DBAPICursor(with_metaclass(abc.ABCMeta, object)):
         :py:meth:`execute` did not produce any result set or no call was issued yet.
         """
         return list(iter(self.fetchone, None))
+
+    async def async_fetchall(self):
+        """Fetch all (remaining) rows of a query result, returning them as a sequence of sequences
+        (e.g. a list of tuples).
+
+        An :py:class:`~pyhive.exc.Error` (or subclass) exception is raised if the previous call to
+        :py:meth:`execute` did not produce any result set or no call was issued yet.
+        """
+        result = True
+        while result:
+            result = await self.fetchone()
+            if result:
+                yield result
 
     @property
     def arraysize(self):
